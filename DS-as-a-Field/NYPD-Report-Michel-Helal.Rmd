@@ -1,0 +1,268 @@
+---
+title: "NYPD-Report-Michel-Helal"
+author: "Michel Helal"
+date: "2024-09-09"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Shooting NYPD Report 
+This report analyzes NYPD shooting incidents using a dataset with details such as date, time, location, and demographics. We will explore relationships between different variables and look for possible sources of bias. Data quality will be checked to ensure it is accurate and reliable. Simple machine learning models will be used to help predict outcomes and validate our findings. The aim is to provide clear insights and useful recommendations for decision-making.
+
+## Main Goals
+
+- **Geographic Distribution Examination:** Investigate the spatial distribution of shootings across different boroughs and precincts to determine hotspot areas.
+
+- **Trend Analysis Over Time:** Explore how shooting incidents have evolved from 2006 to the present, identifying any significant changes or patterns.
+
+- **Demographic Information Study:** Analyze the age, sex, and race of both perpetrators and victims to understand demographic trends and potential biases.
+
+- **Future Crime Prediction:** Utilize statistical and machine learning models to forecast future incidents, aiding in proactive policing and resource allocation.
+
+
+## Import Libraries
+```{r import, include=TRUE}
+# To install the necessary libraries, uncomment and run the following lines in your R console:
+
+# install.packages("tidyverse")
+# install.packages("lubridate")
+# install.packages("dplyr")
+# install.packages("ggplot2")
+# install.packages("forecast")
+# install.packages("zoo")
+
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(forecast) 
+library(zoo)
+```
+
+## Load and preview Data
+The data for this report comes from the "NYPD Shooting Incident Data (Historic)" available on NYC OpenData. It includes information about every shooting incident in New York City from 2006 to the end of the last calendar year. The data is updated every year and reviewed by the Office of Management Analysis and Planning. Each record provides details about the shooting event, such as time, place, and demographics of the people involved. This dataset, last updated on April 23, 2024, helps to explore patterns in shooting incidents in NYC.
+```{r load data, include=TRUE}
+url_in = "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+nypd_data <- read.csv(url_in)
+
+# Display the first few rows of the dataset
+head(nypd_data)
+```
+## Summarize Data
+Let's make a statistical summary to have a quick glance of what the file 
+contains. 
+```{r summ data, include=TRUE}
+summary(nypd_data)
+```
+
+## Clean Data
+This code converts specific columns in nypd_data to appropriate data types and 
+removes the INCIDENT_KEY column as it is probably useless. The cleaned data is 
+stored in nypd_data_clean.
+
+```{r clean data, include=TRUE}
+nypd_data_clean <- nypd_data %>%
+  mutate(
+    OCCUR_DATE = as.Date(OCCUR_DATE, format = "%m/%d/%Y"),
+    OCCUR_TIME = hms::as_hms(OCCUR_TIME),
+    BORO = as.factor(BORO),
+    LOC_OF_OCCUR_DESC = as.factor(LOC_OF_OCCUR_DESC),
+    PRECINCT = as.factor(PRECINCT),
+    JURISDICTION_CODE = as.factor(JURISDICTION_CODE),
+    LOCATION_DESC = as.factor(LOCATION_DESC)
+  ) %>%
+  # Drop unnecessary columns
+  select(-INCIDENT_KEY)
+```
+## Check Missing values in the Data
+```{r missing data, include=TRUE}
+#Obtain the percentage of missing values of each column 
+missing_data <- sapply(nypd_data_clean, function(x) sum(is.na(x)) / length(x) * 100)
+missing_data
+```
+## Handle the missing values (drop)
+The percentages of missing data are small, and the dataset is large enought, so
+I will use de drop technique to get rid of them. 
+```{r dropmissing data, include=TRUE}
+nypd_data_clean_na_removed <- nypd_data_clean %>%
+  drop_na()
+```
+
+## Visualization
+```{r analyze, include=TRUE}
+# Group by borough and count the number of incidents per borough
+cases_per_borough <- nypd_data_clean %>%
+  group_by(BORO) %>%
+  summarise(total_incidents = n()) %>%
+  arrange(desc(total_incidents))
+
+# Print table of cases per borough
+print(cases_per_borough)
+
+# Bar plot to visualize the cases per borough
+ggplot(cases_per_borough, aes(x = reorder(BORO, -total_incidents), y = total_incidents, fill = BORO)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total Incidents per Borough", x = "Borough", y = "Number of Incidents") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r plot-age-group, echo=TRUE}
+# Group data by key variables and count incidents
+incident_counts <- nypd_data_clean%>%group_by(PERP_AGE_GROUP, PERP_SEX, PERP_RACE)%>%summarise(total_incidents =n(), .groups ='drop')
+
+# Bar plot showing average number of incidents by perpetrator age group
+ggplot(incident_counts, aes(x = PERP_AGE_GROUP, y = total_incidents)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Number of Incidents by Perpetrator Age Group", x = "Perpetrator Age Group", y = "Total Number of Incidents") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r plot-sex, echo=TRUE}
+# Bar plot showing average number of incidents by perpetrator sex
+ggplot(incident_counts, aes(x = PERP_SEX, y = total_incidents)) +
+  geom_bar(stat = "identity", fill = "lightgreen") +
+  labs(title = "Number of Incidents by Perpetrator Sex", x = "Perpetrator Sex", y = "Total Number of Incidents") +
+  theme_minimal()
+```
+
+###  Bad Data Detected!!
+It is clear that we have some bad data . Like 0, (null), 940 and UNKNOWN 
+age group. Also let's try to show only F and M for Sex groups. 
+
+```{r clean-age-sex, echo=TRUE}
+nypd_data_clean <- nypd_data_clean %>%
+  filter(
+    !PERP_AGE_GROUP %in% c("0","1020" ,"1028","224","(null)", "940", "UNKNOWN") &
+    !VIC_AGE_GROUP %in% c("0", "(null)", "940", "UNKNOWN") &
+    PERP_SEX %in% c("F", "M") &
+    VIC_SEX %in% c("F", "M")
+  )
+```
+
+Lets plot again
+
+```{r plot-age-group-2, echo=TRUE}
+# Group data by key variables and count incidents
+incident_counts <- nypd_data_clean%>%group_by(PERP_AGE_GROUP, PERP_SEX, PERP_RACE)%>%summarise(total_incidents =n(), .groups ='drop')
+# Bar plot showing average number of incidents by perpetrator age group
+ggplot(incident_counts, aes(x = PERP_AGE_GROUP, y = total_incidents)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Number of Incidents by Perpetrator Age Group", x = "Perpetrator Age Group", y = "Total Number of Incidents") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r plot-sex-2, echo=TRUE}
+# Bar plot showing average number of incidents by perpetrator sex
+ggplot(incident_counts, aes(x = PERP_SEX, y = total_incidents)) +
+  geom_bar(stat = "identity", fill = "lightgreen") +
+  labs(title = "Number of Incidents by Perpetrator Sex", x = "Perpetrator Sex", y = "Total Number of Incidents") +
+  theme_minimal()
+```
+
+Now  that data seems more natural, lets move to model and analysis. 
+
+## Modeling the data
+We will try to forecast the crime trends. For this we will reserve some data
+at the end of the series, to compare reality with forecasting of our model. 
+
+Let's aggregate data by date and visualize incidents over time to see how it
+behaves. 
+```{r visualize_timeseries, include=TRUE}
+# Group incidents by month
+monthly_incidents <- nypd_data_clean %>%
+  mutate(month = floor_date(OCCUR_DATE, "month")) %>%
+  group_by(month) %>%
+  summarise(total_incidents = n())
+
+# Define the cutoff date
+cutoff_date <- as.Date("2023-02-01")
+
+# Filter the data to include only dates up to the cutoff date
+monthly_incidents_filtered <- monthly_incidents %>%
+  filter(month <= cutoff_date)
+
+# Line plot of incidents over months with reduced x-axis labels (every 6 months)
+ggplot(monthly_incidents_filtered, aes(x = month, y = total_incidents)) +
+  geom_line(color = "blue") +
+  labs(title = "Incidents Over Time (Grouped by Month)", x = "Month", y = "Number of Incidents") +
+  theme_minimal() +
+  scale_x_date(date_labels = "%Y", date_breaks = "12 months") +  # Show labels every 6 months
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Now let's perform the forecasting and see how it compares to reality. 
+
+```{r visualize_forecast, include=TRUE}
+# Prepare Time Series Data up to cutoff date
+monthly_ts <- ts(monthly_incidents_filtered$total_incidents, start = c(year(min(monthly_incidents_filtered$month)), month(min(monthly_incidents_filtered$month))), frequency = 12)
+
+# Fit a Forecast Model
+# Fit an ARIMA model
+fit <- auto.arima(monthly_ts)
+
+# Summary of the model
+summary(fit)
+
+# Forecast the next 12 months after the cutoff date
+forecast_horizon <- 12
+future_forecast <- forecast(fit, h = forecast_horizon)
+
+# Extract forecast values for the future period
+forecasted_df <- data.frame(
+  month = seq(max(monthly_incidents_filtered$month) + months(1), by = "month", length.out = forecast_horizon),
+  total_incidents = future_forecast$mean
+)
+
+# Combine real and forecasted data
+combined_df <- bind_rows(monthly_incidents, forecasted_df)
+
+# Plot real and forecasted data
+ggplot() +
+  geom_line(data = monthly_incidents %>% filter(month <= cutoff_date), aes(x = month, y = total_incidents), color = "blue") +
+  geom_line(data = forecasted_df, aes(x = month, y = total_incidents), color = "red", linetype = "dashed") +
+  geom_line(data = monthly_incidents %>% filter(month > cutoff_date), aes(x = month, y = total_incidents), color = "black") +
+  labs(title = "Real vs Forecasted Incidents Over Time", x = "Month", y = "Number of Incidents") +
+  theme_minimal() +
+  scale_x_date(date_labels = "%Y", date_breaks = "12 months") +  # Show labels every 6 months
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+It seems like the model does a pretty decent job in forecasting. At least 
+captures the main trend for a short period ahead. 
+
+## Analysis: Effect of Perpetrator Race on Number of Incidents
+To finish, lets see if we can find a correlation between Race and Incidents. 
+```{r plot-race, echo=TRUE}
+# Bar plot showing average number of incidents by perpetrator race
+ggplot(incident_counts, aes(x = PERP_RACE, y = total_incidents)) +
+  geom_bar(stat = "identity", fill = "lightcoral") +
+  labs(title = "Number of Incidents by Perpetrator Race", x = "Perpetrator Race", y = "Total Number of Incidents") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Some  Conclusions
+From the visualizations we can conclude that location, age, and race 
+are indeed factors very closely related to the crime reports. More investigation
+will however be needed to figure out if there is some causation or just a 
+correlation. 
+
+### About Bias in Data. 
+
+There may be some sort of bias in this conlcusions. Race and crime are very 
+close related. But there is also evidence that opportunities and participation 
+in goverment are inhomogeneus among different races. 
+
+Also in some boroughs reports of crimes are more scarce. This is due to lack 
+of confidence in police for example. 
+
+To sum up prior to make any conclusions one may have to be very 
+careful and be aware of any source of bias introduced in the analysis. 
+
